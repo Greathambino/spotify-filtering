@@ -1,0 +1,14 @@
+{
+  "projects": {
+    "default": "spotify-filtering"
+  },
+  "targets": {
+    "spotify-filtering": {
+      "hosting": {
+        "app": [
+          "spotify-filtering-wyatt"
+        ]
+      }
+    }
+  }
+}

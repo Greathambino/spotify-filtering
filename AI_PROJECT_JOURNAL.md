@@ -1,0 +1,205 @@
+# Spotify Filtering — AI Project Journal
+
+This journal records the project decisions, implementation work, debugging
+results, and next actions captured with AI assistance. It is intended to make
+future sessions easy to resume without repeating completed investigation.
+
+## Project
+
+**Spotify Filtering** is a Vite web app that imports a user's Spotify
+playlists and eventually lets them organize and filter songs with persistent
+tags. The long-term goal is to support tag intersection, hierarchical tags,
+and explicit creation of filtered Spotify playlists.
+
+The active proof-of-concept app is in
+[`spotify-profile-demo`](./spotify-profile-demo/).
+
+## Journal entry — October 7, 2026
+
+### Authentication and identity
+
+- Confirmed that the app should use Spotify OAuth as its required sign-in
+  method. Users need to be authenticated with Spotify because the app must
+  access their Spotify profile, playlists, and tracks.
+- Clarified that Supabase dashboard ownership, Supabase Auth users, Spotify
+  accounts, and SMTP sender accounts are separate identities.
+- Confirmed that creating the Supabase project with a personal account does
+  not compromise the project. The project can continue to be used for
+  development and can be administered or transferred later.
+- Confirmed that users do not need Gmail accounts. Gmail is only an SMTP
+  sender if Gmail is selected for Supabase email delivery.
+- The existing Spotify Auth user for `gummyland1` remains in Supabase.
+- The temporary email-auth user created during SMTP testing was deleted. It
+  was not part of the intended product flow.
+
+### SMTP configuration and verification
+
+- Enabled two-factor authentication on the professional Gmail account.
+- Created a Google App Password. The App Password must remain private and
+  must never be committed to the repository or shared in chat.
+- Configured Supabase custom SMTP with:
+
+  ```text
+  Host: smtp.gmail.com
+  Port: 587
+  Sender/SMTP username: professional Gmail address
+  Password: Google App Password
+  ```
+
+- Supabase does not provide a dedicated SMTP test button in the dashboard.
+- Verified the configuration by using the Supabase invitation flow to send an
+  email.
+- The invitation email arrived successfully, but Gmail placed it in Spam.
+  This confirms SMTP connectivity and delivery. The Spam placement is
+  expected during early development with a Gmail sender.
+- The Supabase warning about Gmail being intended for personal rather than
+  transactional email can be ignored for development. A transactional
+  provider with SPF/DKIM should be considered before production.
+- SMTP is auxiliary to the app. It is not required for ordinary Spotify OAuth
+  login.
+
+### Current Spotify login blocker
+
+After the SMTP test and removal of the temporary email user, the app displayed:
+
+> Spotify login failed: Unverified email with spotify. A confirmation email
+> has been sent to your spotify email.
+
+This is an Auth/provider-email verification issue, not evidence that the
+Spotify user was deleted. The current plan is to pause while the relevant rate
+limit resets, then check the email associated with the Spotify account and
+follow the verification link before retrying.
+
+The browser console message about:
+
+```text
+Unchecked runtime.lastError: The message port closed before a response was received.
+```
+
+is from a browser extension and is unrelated to the app's OAuth implementation.
+
+## Earlier implementation milestones
+
+### Proof of concept
+
+- Built the initial tag-filtering demonstration with:
+  - Include-tag intersection (“match all”)
+  - Exclude tags
+  - Reset behavior
+  - Result counts
+- Verified the Vite app with a production build.
+
+### Spotify OAuth
+
+- Replaced the incomplete login flow with Spotify Authorization Code + PKCE.
+- Corrected callback placement, redirect URI configuration, token exchange, and
+  profile loading.
+- Established the local development URL:
+
+  ```text
+  http://127.0.0.1:5173/
+  ```
+
+- Later migrated the frontend to Supabase's built-in Spotify OAuth provider.
+- The Spotify client secret remains in Supabase and is not stored in frontend
+  code or the local environment file.
+- The current frontend expects the Supabase session's
+  `session.provider_token` for Spotify API requests.
+
+### Supabase migration
+
+- Replaced Firebase runtime usage with Supabase.
+- Added the Supabase JavaScript client and persistence helpers.
+- Added relational tables for:
+  - Users
+  - Playlists
+  - Tracks
+  - Artists
+  - Tags
+  - Track/tag relationships
+  - Nested folders and playlist/folder relationships
+  - Playlist creation jobs
+- Applied the schema and RLS policies in Supabase.
+- Added explicit API grants after encountering table permission errors.
+- Confirmed that Spotify profile persistence works.
+- Added playlist catalog persistence and selected-playlist track import logic.
+- Added playlist deduplication after PostgreSQL rejected duplicate rows within
+  one upsert request.
+
+### Playlist loading and folders
+
+- Replaced the original single playlist request with pagination using Spotify's
+  `limit` and `offset` parameters, allowing the app to load the complete
+  playlist catalog.
+- Confirmed that Spotify's official Web API exposes playlists as a flat list
+  and does not expose the folder hierarchy shown in the Spotify desktop app.
+- Implemented app-managed nested folders instead:
+  - Root folders
+  - Child folders
+  - Expand/collapse controls
+  - Playlist assignment
+  - Recursive folder-level selection
+  - Unfiled playlists
+- Saved the folder layout in browser `localStorage`, keyed by Spotify user ID.
+- Native Spotify folders still cannot be reconstructed automatically through
+  the official API.
+
+## Current technical state
+
+- App directory:
+  `spotify-profile-demo/`
+- Local command:
+
+  ```sh
+  cd "/Users/wyatthamabe/Personal VSCode/spotify-filtering/spotify-profile-demo"
+  npm run dev -- --host 127.0.0.1 --port 5173 --strictPort
+  ```
+
+- Build command:
+
+  ```sh
+  npm run build
+  ```
+
+- Supabase project URL:
+  `https://tvlitulnmtivelgtuvno.supabase.co`
+- Supabase callback URL:
+  `https://tvlitulnmtivelgtuvno.supabase.co/auth/v1/callback`
+- Local allowed redirect URL:
+  `http://127.0.0.1:5173/`
+- The app's filtering screen still uses sample songs for the proof of concept.
+- Folder data is still browser-local rather than stored in Supabase.
+- Durable Spotify OAuth has been implemented but has not yet completed a clean
+  end-to-end login after the email-verification/rate-limit issue.
+
+## Resume checklist
+
+1. Do not repeatedly retry Spotify login while the rate limit is active.
+2. After the rate limit resets, check the Spotify account email inbox and Spam
+   folder for the Supabase verification email.
+3. Click the verification link, then retry:
+   `http://127.0.0.1:5173/`
+4. If login still fails, inspect Supabase Auth logs before changing frontend
+   code.
+5. Verify the Spotify provider client ID and secret, Supabase redirect settings,
+   and Spotify's callback URL.
+6. Confirm that the existing Spotify Auth user is reused and that only one
+   corresponding public `users` row exists.
+7. Once OAuth is stable, move app-managed folders into the Supabase
+   `folders` and `folder_playlists` tables.
+8. Validate selected-playlist track import in `tracks`, `artists`,
+   `playlist_tracks`, and `track_artists`.
+9. Implement persistent hierarchical tag CRUD and replace sample-song
+   filtering with imported-track filtering.
+10. Add an explicit, user-triggered workflow for creating filtered Spotify
+    playlists.
+
+## Guardrails
+
+- Never place Spotify client secrets, Supabase service-role keys, Gmail
+  passwords, or Google App Passwords in frontend code, `.env.example`, Git, or
+  chat.
+- Keep using port `5173` with `--strictPort`; `127.0.0.1:5173` and
+  `127.0.0.1:5174` have separate browser storage and sessions.
+- Do not delete the existing Spotify Auth user while cleaning up temporary
+  email-auth test users.
