@@ -701,7 +701,13 @@ label span,
 .song-list {
   display: grid;
   gap: 9px;
+  max-height: 430px;
   margin-top: 25px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  scrollbar-color: #53644d #182019;
 }
 
 .song-card {
