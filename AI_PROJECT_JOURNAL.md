@@ -194,6 +194,65 @@ is from a browser extension and is unrelated to the app's OAuth implementation.
   whose tracks actually exist in Supabase. Unimported playlists are excluded
   as null/unavailable tags.
 
+## Journal entry — October 8, 2026
+
+### Public deployment
+
+- Built the production frontend successfully with `npm run build`.
+- Deployed the Vite app to Firebase Hosting at:
+  `https://spotify-filtering.web.app/`
+- Confirmed that the public homepage can be opened without the local Vite
+  development server running. The user's computer does not need to stay on for
+  Firebase Hosting, Supabase, or Spotify-backed app features to work.
+- Clarified that `npm run dev` is only for local development. Future releases
+  require rebuilding and deploying:
+
+  ```sh
+  cd "/Users/wyatthamabe/Personal VSCode/spotify-filtering/spotify-profile-demo"
+  npm run build
+  firebase deploy --only hosting
+  ```
+
+- Firebase's generated `web.app` URL keeps hosting free within the service's
+  free limits. A custom domain is optional and would normally require an
+  annual registration fee.
+
+### OAuth redirect debugging
+
+- Diagnosed a login redirect that returned to
+  `http://127.0.0.1:5173/` after the local server had been stopped. The
+  browser correctly returned to the origin where that login attempt started;
+  the public Firebase site itself was not down.
+- Confirmed that the frontend uses `window.location.origin` for its final
+  Supabase redirect destination.
+- Distinguished the two OAuth redirects:
+  - Spotify's provider callback:
+    `https://tvlitulnmtivelgtuvno.supabase.co/auth/v1/callback`
+  - The final app destinations:
+    `https://spotify-filtering.web.app/` for production and
+    `http://127.0.0.1:5173/` for local development.
+- Production login should be started from the Firebase URL, and both final
+  destinations should be allowed in Supabase Auth URL configuration.
+
+### Documentation
+
+- Updated the app README with:
+  - A user walkthrough for importing playlists, choosing tags, and creating a
+    private Spotify playlist.
+  - Explanations of playlist, decade, Clean/Explicit, and custom tags.
+  - Include/exclude/clear filtering behavior and intersection semantics.
+  - Local development, Supabase migration, OAuth, build, and redeployment
+    instructions.
+  - A FAQ covering permissions, duplicate tracks, private playlists, large
+    imports, unavailable tracks, session expiration, stored data, saved sets,
+    mobile use, Spotify affiliation, and troubleshooting.
+- Documented the app architecture and software-engineering concepts:
+  Vite, vanilla JavaScript, Firebase Hosting, Supabase, Postgres, Spotify's
+  Web API, OAuth, normalization, relationship tables, migrations, RLS,
+  production builds, and static hosting.
+- Pushed the implementation and documentation changes to the GitHub `main`
+  branch in commit `80d1b7c`.
+
 ## Resume checklist
 
 1. Do not repeatedly retry Spotify login while the rate limit is active.
