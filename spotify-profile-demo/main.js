@@ -1044,6 +1044,8 @@ async function importSelectedTracks() {
       },
     );
     userTags = await loadUserTags(supabaseUser);
+    tagPanel.hidden = false;
+    trackResultsPanel.hidden = false;
     renderTagPicker();
     refreshTrackResults();
     playlistStatus.textContent =
