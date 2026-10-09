@@ -33,8 +33,17 @@ create table public.tracks (
   title text not null,
   album_id text,
   album_name text,
+  release_year integer,
+  release_date text,
+  release_date_precision text,
+  duration_ms integer,
+  disc_number integer,
+  track_number integer,
   explicit boolean not null default false,
   spotify_uri text,
+  spotify_url text,
+  is_local boolean not null default false,
+  available_markets jsonb,
   updated_at timestamptz not null default now(),
   unique (user_id, spotify_track_id)
 );
@@ -43,6 +52,8 @@ create table public.playlist_tracks (
   playlist_id uuid not null references public.playlists(id) on delete cascade,
   track_id uuid not null references public.tracks(id) on delete cascade,
   position integer,
+  added_at timestamptz,
+  added_by_spotify_user_id text,
   primary key (playlist_id, track_id)
 );
 
@@ -51,6 +62,8 @@ create table public.artists (
   user_id uuid not null references public.users(id) on delete cascade,
   spotify_artist_id text not null,
   name text not null,
+  spotify_url text,
+  image_url text,
   unique (user_id, spotify_artist_id)
 );
 
@@ -59,6 +72,15 @@ create table public.track_artists (
   artist_id uuid not null references public.artists(id) on delete cascade,
   artist_order integer not null default 0,
   primary key (track_id, artist_id)
+);
+
+create table public.spotify_track_snapshots (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  track_id uuid not null references public.tracks(id) on delete cascade,
+  spotify_track_id text not null,
+  payload jsonb not null,
+  fetched_at timestamptz not null default now()
 );
 
 create table public.tags (
@@ -90,6 +112,20 @@ create table public.folder_playlists (
   primary key (folder_id, playlist_id)
 );
 
+create table public.playlist_sets (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.users(id) on delete cascade,
+  name text not null,
+  created_at timestamptz not null default now(),
+  unique (user_id, name)
+);
+
+create table public.playlist_set_playlists (
+  set_id uuid not null references public.playlist_sets(id) on delete cascade,
+  playlist_id uuid not null references public.playlists(id) on delete cascade,
+  primary key (set_id, playlist_id)
+);
+
 create table public.playlist_jobs (
   id uuid primary key default gen_random_uuid(),
   user_id uuid not null references public.users(id) on delete cascade,
@@ -107,10 +143,13 @@ grant select, insert, update, delete on
   public.playlist_tracks,
   public.artists,
   public.track_artists,
+  public.spotify_track_snapshots,
   public.tags,
   public.track_tags,
   public.folders,
   public.folder_playlists,
+  public.playlist_sets,
+  public.playlist_set_playlists,
   public.playlist_jobs
 to anon, authenticated;
 
@@ -122,10 +161,13 @@ alter table public.tracks enable row level security;
 alter table public.playlist_tracks enable row level security;
 alter table public.artists enable row level security;
 alter table public.track_artists enable row level security;
+alter table public.spotify_track_snapshots enable row level security;
 alter table public.tags enable row level security;
 alter table public.track_tags enable row level security;
 alter table public.folders enable row level security;
 alter table public.folder_playlists enable row level security;
+alter table public.playlist_sets enable row level security;
+alter table public.playlist_set_playlists enable row level security;
 alter table public.playlist_jobs enable row level security;
 
 create policy "users own their profile" on public.users for all using (auth.uid() = id) with check (auth.uid() = id);
@@ -134,6 +176,7 @@ create policy "users own their tracks" on public.tracks for all using (auth.uid(
 create policy "users own their artists" on public.artists for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "users own their tags" on public.tags for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "users own their folders" on public.folders for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
+create policy "users own their playlist sets" on public.playlist_sets for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 create policy "users own their jobs" on public.playlist_jobs for all using (auth.uid() = user_id) with check (auth.uid() = user_id);
 
 create policy "users own playlist tracks" on public.playlist_tracks for all
@@ -148,6 +191,9 @@ create policy "users own playlist tracks" on public.playlist_tracks for all
 create policy "users own track artists" on public.track_artists for all
   using (exists (select 1 from public.tracks t where t.id = track_id and t.user_id = auth.uid()))
   with check (exists (select 1 from public.tracks t where t.id = track_id and t.user_id = auth.uid()));
+create policy "users own track snapshots" on public.spotify_track_snapshots for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
 create policy "users own track tags" on public.track_tags for all
   using (
     exists (select 1 from public.tracks t where t.id = track_id and t.user_id = auth.uid())
@@ -164,5 +210,14 @@ create policy "users own folder playlists" on public.folder_playlists for all
   )
   with check (
     exists (select 1 from public.folders f where f.id = folder_id and f.user_id = auth.uid())
+    and exists (select 1 from public.playlists p where p.id = playlist_id and p.user_id = auth.uid())
+  );
+create policy "users own playlist set playlists" on public.playlist_set_playlists for all
+  using (
+    exists (select 1 from public.playlist_sets s where s.id = set_id and s.user_id = auth.uid())
+    and exists (select 1 from public.playlists p where p.id = playlist_id and p.user_id = auth.uid())
+  )
+  with check (
+    exists (select 1 from public.playlist_sets s where s.id = set_id and s.user_id = auth.uid())
     and exists (select 1 from public.playlists p where p.id = playlist_id and p.user_id = auth.uid())
   );

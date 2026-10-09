@@ -172,6 +172,28 @@ is from a browser extension and is unrelated to the app's OAuth implementation.
 - Durable Spotify OAuth has been implemented but has not yet completed a clean
   end-to-end login after the email-verification/rate-limit issue.
 
+### October 8, 2026 — playlist sets
+
+- Removed the frontend's app-managed nested-folder workflow.
+- Added named playlist sets saved in browser `localStorage`, keyed by Spotify
+  user ID.
+- Each set stores its selected Spotify playlist IDs.
+- The active set is restored after logging back in, so a person does not need
+  to reselect a large collection of playlists.
+- Multiple people sharing one Spotify account can create and switch between
+  named sets such as `Wyatt's songs` and `Other person's songs`.
+- Playlist search and alphabetical ordering remain available.
+- The existing `folders` and `folder_playlists` database tables are retained
+  for compatibility with the already-applied schema, but the frontend no
+  longer reads or writes them.
+- Sets are currently browser-local. Moving named sets into Supabase is a
+- Named playlist sets were subsequently moved into Supabase with
+  `playlist_sets` and `playlist_set_playlists`, so they can follow the account
+  across browsers and devices.
+- The tag picker was narrowed to playlist-name tags from the active saved set
+  whose tracks actually exist in Supabase. Unimported playlists are excluded
+  as null/unavailable tags.
+
 ## Resume checklist
 
 1. Do not repeatedly retry Spotify login while the rate limit is active.

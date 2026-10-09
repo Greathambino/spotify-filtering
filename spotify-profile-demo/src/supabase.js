@@ -19,7 +19,10 @@ export async function signInWithSpotify() {
     provider: "spotify",
     options: {
       redirectTo: `${window.location.origin}/`,
-      scopes: "user-read-private user-read-email playlist-read-private playlist-read-collaborative",
+      scopes: "user-read-private user-read-email playlist-read-private playlist-read-collaborative playlist-modify-private",
+      queryParams: {
+        show_dialog: "true",
+      },
     },
   });
   if (error) throw new Error(`Spotify authentication failed: ${error.message}`);
