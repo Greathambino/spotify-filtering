@@ -4,6 +4,49 @@ This journal records the project decisions, implementation work, debugging
 results, and next actions captured with AI assistance. It is intended to make
 future sessions easy to resume without repeating completed investigation.
 
+## Everything You Need to Revisit This Project
+
+### Spotify Developer Dashboard
+
+- Dashboard: [developer.spotify.com/dashboard](https://developer.spotify.com/dashboard)
+- Spotify project name: `Playlist Tag Filtering`
+- The **User Management** tab is important when the app is in Development Mode.
+  Add anyone who needs to log in by email.
+- The Spotify app can have a maximum of five allowed users at a time.
+
+### Supabase Dashboard
+
+- Project dashboard:
+  [supabase.com/dashboard/project/tvlitulnmtivelgtuvno](https://supabase.com/dashboard/project/tvlitulnmtivelgtuvno)
+- Supabase project name: `spotify-filtering`
+- Important tabs:
+  - **Table Editor** — inspect and manage database tables and rows.
+  - **SQL Editor** — run the schema and migration SQL files from the
+    `spotify-profile-demo/supabase/` folder.
+  - **Authentication** — manage Spotify OAuth, users, URL configuration, and
+    authentication logs.
+
+### GitHub repository
+
+- Source code and project history:
+  [github.com/Greathambino/spotify-filtering](https://github.com/Greathambino/spotify-filtering)
+- The primary branch is `main`.
+
+### Public app
+
+- Hosted app:
+  [spotify-filtering.web.app](https://spotify-filtering.web.app/)
+- This is the URL to share with users. The local Vite URL
+  (`http://127.0.0.1:5173/`) is only for development on the local computer.
+
+### Finding ideas for future APIs
+
+- Music API directory:
+  [publicapis.io/category/music](https://publicapis.io/category/music)
+- Use this when looking for new data sources or creative features to add to
+  the project. Check each API's documentation, rate limits, authentication
+  requirements, license, and terms before integrating it.
+
 ## Project
 
 **Spotify Filtering** is a Vite web app that imports a user's Spotify
