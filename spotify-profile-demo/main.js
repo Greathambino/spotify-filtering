@@ -125,7 +125,7 @@ document.querySelector("#app").innerHTML = `
           <span id="import-progress-label">Preparing import…</span>
           <span id="import-progress-percent">0%</span>
         </div>
-        <progress id="import-progress-bar" max="100" value="0" aria-label="Overall playlist import progress"></progress>
+        <progress id="import-progress-bar" max="100" value="0" aria-label="Playlist import phase progress"></progress>
       </div>
       <p id="playlist-status" class="profile-status"></p>
     </section>
@@ -149,13 +149,14 @@ document.querySelector("#app").innerHTML = `
         for the source.
       </p>
       <div id="tag-picker" class="tag-picker" role="group" aria-label="Playlist and custom tags"></div>
+      <p id="tag-scroll-hint" class="tag-scroll-hint" hidden>More tags below <span aria-hidden="true">↓</span></p>
     </section>
 
     <section id="track-results-panel" class="results" aria-live="polite" aria-labelledby="track-results-heading" hidden>
       <div class="results-heading">
         <div>
           <p class="eyebrow">3 · Review and create</p>
-          <h2 id="track-results-heading"><span id="track-result-count">0</span> songs</h2>
+          <h2 id="track-results-heading"><span id="track-result-count">0</span><span id="track-result-label"> songs</span></h2>
         </div>
         <div class="results-actions">
           <p id="track-filter-description" class="filter-description">No tags selected</p>
@@ -225,6 +226,7 @@ const playlistPanel = document.querySelector("#playlist-panel");
 const tagPanel = document.querySelector("#tag-panel");
 const trackResultsPanel = document.querySelector("#track-results-panel");
 const trackResultCount = document.querySelector("#track-result-count");
+const trackResultLabel = document.querySelector("#track-result-label");
 const trackFilterDescription = document.querySelector("#track-filter-description");
 const exportTrackSampleButton = document.querySelector("#export-track-sample");
 const createPlaylistButton = document.querySelector("#create-playlist");
@@ -243,6 +245,7 @@ const createSetButton = document.querySelector("#create-set");
 const playlistSearchInput = document.querySelector("#playlist-search");
 const playlistSetStatus = document.querySelector("#playlist-set-status");
 const tagPicker = document.querySelector("#tag-picker");
+const tagScrollHint = document.querySelector("#tag-scroll-hint");
 const tagStatus = document.querySelector("#tag-status");
 const appPanels = [profilePanel, playlistPanel, tagPanel, trackResultsPanel];
 const appPanelVisibility = new Map();
@@ -276,9 +279,16 @@ function updateImportProgress(percent, label) {
   importProgress.setAttribute("aria-hidden", "false");
   importProgress.classList.toggle("is-complete", boundedPercent === 100);
   importProgressBar.value = boundedPercent;
-  importProgressBar.setAttribute("aria-label", label);
+  importProgressBar.setAttribute("aria-label", `${label} (${boundedPercent}%)`);
   importProgressLabel.textContent = label;
   importProgressPercent.textContent = `${boundedPercent}%`;
+}
+
+function setImportButtonBusy(isBusy, label = "Import your playlists") {
+  importTracksButton.disabled = isBusy;
+  importTracksButton.textContent = label;
+  importTracksButton.classList.toggle("is-loading", isBusy);
+  importTracksButton.setAttribute("aria-busy", String(isBusy));
 }
 
 async function spotifyGet(accessToken, endpoint) {
@@ -528,6 +538,13 @@ function renderTagPicker() {
     group.append(chips);
     tagPicker.append(group);
   });
+  updateTagScrollHint();
+}
+
+function updateTagScrollHint() {
+  const hasMoreBelow = tagPicker.scrollHeight > tagPicker.clientHeight
+    && tagPicker.scrollTop + tagPicker.clientHeight < tagPicker.scrollHeight - 1;
+  tagScrollHint.hidden = !hasMoreBelow;
 }
 
 function getTagStateLabels() {
@@ -594,6 +611,7 @@ function renderTrackResults(tracks) {
   const filteredTracks = getFilteredTracks(tracks);
 
   trackResultCount.textContent = filteredTracks.length;
+  trackResultLabel.textContent = " songs";
   exportTrackSampleButton.disabled = !tracks.length;
   createPlaylistButton.disabled = !filteredTracks.length || playlistCreationInProgress;
   trackFilterDescription.textContent = included.length || excluded.length
@@ -674,7 +692,8 @@ function setTrackResultsLoading(isLoading) {
   createPlaylistButton.disabled = isLoading || playlistCreationInProgress || !importedTracks.length;
   exportTrackSampleButton.disabled = isLoading || !importedTracks.length;
   if (!isLoading) return;
-  trackResultCount.textContent = "0";
+  trackResultCount.textContent = "";
+  trackResultLabel.textContent = "Loading selected tracks…";
   trackFilterDescription.textContent = "Loading the selected playlist set…";
   const loadingState = document.createElement("p");
   loadingState.className = "loading-state";
@@ -1059,10 +1078,9 @@ async function importSelectedTracks() {
     playlistStatus.textContent = "Select at least one playlist first.";
     return;
   }
-  importTracksButton.disabled = true;
-  importedTracks = [];
+  setImportButtonBusy(true, "Importing…");
   tagStates.clear();
-  updateImportProgress(0, "Fetching playlist tracks…");
+  updateImportProgress(0, "Spotify · Checking playlists — 0 selected");
   setTrackResultsLoading(true);
   renderTagPicker();
   updateTagStatus();
@@ -1078,28 +1096,34 @@ async function importSelectedTracks() {
       (progress) => {
         if (progress.phase === "fetching") {
           const playlistPercent = progress.playlistsTotal
-            ? (progress.playlistsCompleted / progress.playlistsTotal) * 30
+            ? (progress.playlistsCompleted / progress.playlistsTotal) * 100
             : 0;
-          updateImportProgress(playlistPercent, `Fetching playlists… ${progress.playlistsCompleted}/${progress.playlistsTotal}`);
-        } else if (progress.phase === "persisting") {
           updateImportProgress(
-            progress.progressPercent || 30,
-            progress.progressPercent >= 90 ? "Finishing import…" : "Saving track metadata…",
+            playlistPercent,
+            `Spotify · Checking playlists — ${progress.playlistsCompleted}/${progress.playlistsTotal}`,
+          );
+        } else if (progress.phase === "persisting") {
+          const trackPercent = progress.uniqueTrackCount
+            ? (progress.processedTrackCount / progress.uniqueTrackCount) * 100
+            : 0;
+          updateImportProgress(
+            trackPercent,
+            `Spotify · Saving track metadata — ${progress.processedTrackCount}/${progress.uniqueTrackCount}`,
           );
         } else if (progress.phase === "complete") {
-          updateImportProgress(95, "Refreshing imported tracks…");
+          updateImportProgress(100, "Spotify · Import data saved");
         }
         const uniqueTrackCount = progress.uniqueTrackCount ?? 0;
         if (progress.phase === "fetching") {
           playlistStatus.textContent =
-            `${progress.playlistsCompleted} of ${progress.playlistsTotal} playlists fetched · `
+            `Spotify: ${progress.playlistsCompleted} of ${progress.playlistsTotal} playlists checked · `
             + "Collecting tracks…";
         } else if (progress.phase === "persisting") {
           playlistStatus.textContent =
             `${uniqueTrackCount} unique tracks found · `
-            + "Saving import data…";
+            + `${progress.processedTrackCount} saved or already imported`;
         } else {
-          playlistStatus.textContent = `${uniqueTrackCount} unique tracks found · Finalizing…`;
+          playlistStatus.textContent = `${uniqueTrackCount} unique tracks found · Spotify import data saved`;
         }
       },
     );
@@ -1111,8 +1135,13 @@ async function importSelectedTracks() {
       && [...selectedPlaylistIds].every((playlistId) => loadedPlaylistIds.has(playlistId));
     if (!summary.allPlaylistsUnchanged || !sameLoadedSet) {
       await refreshTrackResults();
+    } else {
+      setTrackResultsLoading(false);
+      renderTagPicker();
+      updateTagStatus();
+      renderTrackResults(importedTracks);
     }
-    updateImportProgress(100, "Import complete");
+    updateImportProgress(100, "Spotify · Import complete");
     importProgress.hidden = false;
     importProgress.style.display = "block";
     importProgress.setAttribute("aria-hidden", "false");
@@ -1121,6 +1150,7 @@ async function importSelectedTracks() {
       + `${summary.importedTrackCount + summary.alreadyImportedTrackCount} imported/already imported `
       + `(${summary.importedTrackCount} new, ${summary.alreadyImportedTrackCount} already imported) · `
       + `${summary.failedTrackCount} failed to import.`;
+    setImportButtonBusy(true, "Last.fm processing…");
     void startLastfmEnrichment(supabaseUser);
     if (summary.failedPlaylists.length) {
       playlistStatus.title = summary.failedPlaylists.join("\n");
@@ -1130,31 +1160,36 @@ async function importSelectedTracks() {
   } catch (error) {
     playlistStatus.textContent = error.message;
   } finally {
-    importTracksButton.disabled = false;
+    if (!importProgressLabel.textContent.startsWith("Last.fm ·")) {
+      setImportButtonBusy(false);
+    }
   }
 }
 
 async function startLastfmEnrichment(supabaseUser) {
   try {
     const trackIds = importedTracks.map((track) => track.id).filter(Boolean);
-    updateImportProgress(0, `Preparing Last.fm enrichment… 0/${trackIds.length} tracks`);
+    updateImportProgress(0, `Last.fm · Checking query history — 0/${trackIds.length}`);
     const queueSummary = await enqueueLastfmEnrichment(
       supabaseUser,
       trackIds,
     );
     const workCount = queueSummary.queuedCount + queueSummary.pendingCount;
+    const getLastfmSummary = (failedCount = queueSummary.failedCount) =>
+      `Last.fm: ${queueSummary.queuedCount} new · `
+      + `${queueSummary.alreadyQueriedCount} already queried · `
+      + `${queueSummary.pendingCount} pending · `
+      + `${queueSummary.ineligibleCount} local/unavailable · `
+      + `${failedCount} failed`;
     if (!workCount) {
-      updateImportProgress(100, "Last.fm tags already up to date");
-      playlistStatus.textContent =
-        `Last.fm: ${queueSummary.alreadyQueriedCount} already queried, `
-        + `${queueSummary.ineligibleCount} local tracks not eligible.`;
+      updateImportProgress(
+        100,
+        queueSummary.failedCount ? "Last.fm · Complete with failures" : "Last.fm · Already up to date",
+      );
+      playlistStatus.textContent = getLastfmSummary();
       return;
     }
-    playlistStatus.textContent =
-      `Last.fm: ${queueSummary.queuedCount} new, `
-      + `${queueSummary.alreadyQueriedCount} already queried, `
-      + `${queueSummary.pendingCount} pending, `
-      + `${queueSummary.ineligibleCount} local not eligible…`;
+    playlistStatus.textContent = `${getLastfmSummary()}…`;
     let totalCompleted = 0;
     let totalFailed = 0;
     const enrichmentRequestSize = 20;
@@ -1172,19 +1207,38 @@ async function startLastfmEnrichment(supabaseUser) {
       }
       updateImportProgress(
         (tracksProcessed / totalToProcess) * 100,
-        `Enriching with Last.fm… ${Math.min(tracksProcessed, totalToProcess)}/${totalToProcess} tracks`,
+        `Last.fm · Enriching new tracks — ${Math.min(tracksProcessed, totalToProcess)}/${totalToProcess}`,
       );
       playlistStatus.textContent =
-        `Last.fm enrichment: ${totalCompleted} completed, `
-        + `${totalFailed} failed, `
-        + `${queueSummary.ineligibleCount} local not eligible…`;
+        `Last.fm: ${queueSummary.queuedCount} new · `
+        + `${queueSummary.alreadyQueriedCount + totalCompleted} already queried · `
+        + `${Math.max(0, totalToProcess - tracksProcessed)} pending · `
+        + `${queueSummary.ineligibleCount} local/unavailable · `
+        + `${queueSummary.failedCount + totalFailed} failed…`;
       if (requested < enrichmentRequestSize) break;
     }
     await refreshTrackResults();
-    updateImportProgress(100, "Last.fm enrichment complete");
+    const finalFailedCount = queueSummary.failedCount + totalFailed;
+    const finalPendingCount = Math.max(0, totalToProcess - tracksProcessed);
+    updateImportProgress(
+      100,
+      finalPendingCount
+        ? "Last.fm · Pending work remains"
+        : finalFailedCount
+          ? "Last.fm · Complete with failures"
+          : "Last.fm · Enrichment complete",
+    );
+    playlistStatus.textContent =
+      `Last.fm: ${queueSummary.queuedCount} new · `
+      + `${queueSummary.alreadyQueriedCount + totalCompleted} already queried · `
+      + `${finalPendingCount} pending · `
+      + `${queueSummary.ineligibleCount} local/unavailable · `
+      + `${finalFailedCount} failed`;
   } catch (error) {
     console.error("Last.fm enrichment stopped:", error);
     playlistStatus.textContent = `Last.fm enrichment error: ${error.message}`;
+  } finally {
+    setImportButtonBusy(false);
   }
 }
 
@@ -1226,6 +1280,8 @@ loadPlaylistsButton.addEventListener("click", loadPlaylists);
 importTracksButton.addEventListener("click", importSelectedTracks);
 exportTrackSampleButton.addEventListener("click", exportTrackSample);
 createPlaylistButton.addEventListener("click", createSpotifyPlaylist);
+tagPicker.addEventListener("scroll", updateTagScrollHint);
+window.addEventListener("resize", updateTagScrollHint);
 playlistSearchInput.addEventListener("input", (event) => {
   playlistSearch = event.target.value.trim().toLocaleLowerCase();
   renderPlaylists();

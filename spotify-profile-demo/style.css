@@ -296,6 +296,24 @@ h1 em {
   scrollbar-color: #53644d #182019;
 }
 
+.tag-scroll-hint {
+  min-height: 1.2em;
+  margin: 8px 4px 0;
+  color: var(--muted);
+  font-size: 0.78rem;
+  text-align: center;
+}
+
+.tag-scroll-hint[hidden] {
+  display: block;
+  visibility: hidden;
+}
+
+.tag-scroll-hint span {
+  color: var(--green);
+  font-size: 1rem;
+}
+
 .tag-group + .tag-group {
   margin-top: 16px;
 }
@@ -503,6 +521,28 @@ h1 em {
 .button:disabled {
   cursor: default;
   opacity: 0.65;
+}
+
+.button.is-loading {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.button.is-loading::before {
+  width: 0.85em;
+  height: 0.85em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  content: "";
+  animation: button-spinner 700ms linear infinite;
+}
+
+@keyframes button-spinner {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .profile-details {

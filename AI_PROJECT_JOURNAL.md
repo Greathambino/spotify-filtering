@@ -327,3 +327,82 @@ is from a browser extension and is unrelated to the app's OAuth implementation.
   `127.0.0.1:5174` have separate browser storage and sessions.
 - Do not delete the existing Spotify Auth user while cleaning up temporary
   email-auth test users.
+
+## Journal entry — October 12, 2026
+
+### Import performance and caching
+
+- Reviewed the complete login, playlist selection, import, progress, and tag
+  filtering experience using screen recordings of the live app.
+- Replaced the misleading weighted overall import percentage with
+  phase-specific progress:
+  - Spotify playlist checking shows completed playlists out of the selected
+    total.
+  - Spotify persistence shows processed tracks out of the unique-track total.
+  - Last.fm query-history and enrichment phases show their own counts.
+- Preserved the existing Spotify snapshot cache and unchanged-playlist fast
+  path. Re-importing an unchanged playlist set avoids unnecessary playlist
+  pagination and database reload work.
+- Fixed an unchanged-set regression where the app cleared the in-memory tracks,
+  skipped the reload correctly, but left the results panel permanently showing
+  `Loading selected tracks…`. The fast path now restores and renders the
+  already-loaded tracks.
+- Fixed oversized Supabase eligibility requests by chunking Last.fm local-track
+  checks instead of sending thousands of track IDs in one URL.
+
+### Last.fm enrichment and status reporting
+
+- Improved Last.fm status reporting to distinguish:
+  - New work
+  - Already queried tracks
+  - Pending work
+  - Local/unavailable tracks
+  - Failed jobs
+- Failed jobs are no longer counted as successfully queried.
+- The UI now says `Complete with failures` when failures remain and
+  `Pending work remains` when the worker returns before all requested work is
+  resolved.
+- Kept Last.fm processing targeted to the current imported track set rather
+  than unrelated global queue jobs.
+- Local/private Spotify audio remains available for Spotify filtering but is
+  excluded from Last.fm enrichment.
+
+### Import and loading UX
+
+- Replaced the misleading `0 songs` results heading during import with
+  `Loading selected tracks…`.
+- Added explicit import button states:
+  - `Importing…` during Spotify work
+  - `Last.fm processing…` during background enrichment
+  - A visible spinner and disabled interaction during both phases
+  - Normal `Import your playlists` state after completion or error
+- Preserved the loading-state behavior for the tag and results panels so users
+  cannot interact with incomplete imported data.
+- Updated accessible progress labels to include the active phase and
+  percentage.
+
+### Tag-panel usability
+
+- Added a conditional `More tags below ↓` cue when the tag list overflows its
+  internal scroll region.
+- The cue updates while scrolling and disappears at the bottom.
+- Reserved the cue's layout space while hidden so the results panel does not
+  shift upward when the user reaches the end of the tag list.
+- Verified tag selection and filtering behavior remained intact after the
+  scroll-cue changes.
+
+### Validation and deployment
+
+- Validated the production app repeatedly with:
+
+  ```sh
+  npm run build
+  git diff --check
+  ```
+
+- Deployed the verified frontend updates to:
+  `https://spotify-filtering.web.app/`
+- Confirmed the live bundle contained the new phase labels, Last.fm status
+  wording, import busy states, spinner styling, and scroll cue.
+- The current working changes are ready to commit and push to the GitHub
+  `main` branch.

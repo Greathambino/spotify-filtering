@@ -387,7 +387,14 @@ export async function savePlaylistSet(supabaseUser, set) {
 export async function enqueueLastfmEnrichment(supabaseUser, trackIds) {
   const uniqueTrackIds = [...new Set(trackIds)];
   if (!uniqueTrackIds.length) {
-    return { queuedCount: 0, alreadyQueriedCount: 0, pendingCount: 0 };
+    return {
+      queuedCount: 0,
+      alreadyQueriedCount: 0,
+      pendingCount: 0,
+      ineligibleCount: 0,
+      failedCount: 0,
+      workTrackIds: [],
+    };
   }
   const existingRows = [];
   for (const ids of chunk(uniqueTrackIds)) {
@@ -400,16 +407,23 @@ export async function enqueueLastfmEnrichment(supabaseUser, trackIds) {
     existingRows.push(...(data || []));
   }
   const existingByTrackId = new Map(existingRows.map((row) => [row.track_id, row.status]));
-  const { data: localTracks, error: localTrackError } = await supabase
-    .from("tracks")
-    .select("id")
-    .eq("user_id", supabaseUser.id)
-    .eq("is_local", true)
-    .in("id", uniqueTrackIds);
-  if (localTrackError) {
-    throw new Error(`Could not check Last.fm eligibility: ${localTrackError.message}`);
+  const localTrackResults = await Promise.all(
+    chunk(uniqueTrackIds).map((ids) => supabase
+      .from("tracks")
+      .select("id")
+      .eq("user_id", supabaseUser.id)
+      .eq("is_local", true)
+      .in("id", ids)),
+  );
+  const localTrackIds = new Set();
+  for (const { data, error } of localTrackResults) {
+    if (error) {
+      throw new Error(`Could not check Last.fm eligibility: ${error.message}`);
+    }
+    for (const track of data || []) {
+      localTrackIds.add(track.id);
+    }
   }
-  const localTrackIds = new Set((localTracks || []).map((track) => track.id));
   const eligibleTrackIds = uniqueTrackIds.filter((trackId) => !localTrackIds.has(trackId));
   const newTrackIds = eligibleTrackIds.filter((trackId) => !existingByTrackId.has(trackId));
   const newTrackIdSet = new Set(newTrackIds);
@@ -426,10 +440,12 @@ export async function enqueueLastfmEnrichment(supabaseUser, trackIds) {
   return {
     queuedCount: newTrackIds.length,
     alreadyQueriedCount: eligibleTrackIds.filter((trackId) =>
-      ["complete", "failed"].includes(existingByTrackId.get(trackId))).length,
+      existingByTrackId.get(trackId) === "complete").length,
     pendingCount: eligibleTrackIds.filter((trackId) =>
       ["queued", "running"].includes(existingByTrackId.get(trackId))).length,
     ineligibleCount: localTrackIds.size,
+    failedCount: eligibleTrackIds.filter((trackId) =>
+      existingByTrackId.get(trackId) === "failed").length,
     workTrackIds: eligibleTrackIds.filter((trackId) =>
       ["queued", "running"].includes(existingByTrackId.get(trackId))
       || newTrackIdSet.has(trackId)),
