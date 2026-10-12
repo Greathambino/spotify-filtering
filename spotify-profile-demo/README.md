@@ -134,10 +134,34 @@ For an existing database, apply these migrations once as needed:
   storage used to generate decade tags.
 - [`supabase/track-metadata.sql`](./supabase/track-metadata.sql): expanded
   Spotify metadata and raw track snapshots.
+- [`supabase/lastfm-enrichment.sql`](./supabase/lastfm-enrichment.sql):
+  durable Last.fm enrichment queue and provider-tag storage.
 
 Existing browser-local playlist sets are migrated into Supabase the next time
 that account logs in. The app's database policies use Supabase Row-Level
 Security so users only access their own persisted data.
+
+### Last.fm enrichment
+
+Last.fm enrichment is intentionally asynchronous: Spotify import completes
+without waiting for third-party metadata. Apply
+[`supabase/lastfm-enrichment.sql`](./supabase/lastfm-enrichment.sql), deploy
+[`supabase/functions/enrich-lastfm`](./supabase/functions/enrich-lastfm), and
+set `LASTFM_API_KEY` as a Supabase Edge Function secret. The browser only
+queues tracks and invokes bounded batches; the API key is never exposed to
+frontend code. Track tags are preferred, with artist tags stored separately as
+an explicitly labeled fallback. Once saved, these tags appear in a separate
+Last.fm tag group and remain read-only; user-created tags are not mixed with
+provider data. The queue is retryable and deduplicated, so re-importing
+playlists does not create duplicate work.
+
+
+From the app directory, deploy the function with the Supabase CLI:
+
+```sh
+supabase functions deploy enrich-lastfm
+supabase secrets set LASTFM_API_KEY=your-lastfm-key
+```
 
 ## Spotify and Supabase OAuth configuration
 
@@ -259,8 +283,13 @@ the account or if its tracks are unavailable.
 
 There is no app-specific small playlist limit advertised by the UI. Large
 imports require more API requests and database work, so they can take longer.
-The app batches database queries and Spotify playlist-track requests rather
-than sending an entire large collection in one request.
+The app uses bounded concurrency for Spotify and Supabase requests rather than
+sending an entire large collection in one burst. Re-imports also avoid repeating
+metadata, artist, and snapshot writes for tracks already stored; playlist
+memberships are still fully reconciled. Playlist track pagination is skipped
+when Spotify's playlist `snapshot_id` matches the cached value. Apply
+[`supabase/playlist-snapshot-cache.sql`](./supabase/playlist-snapshot-cache.sql)
+once before using this optimization.
 
 ### What happens to unavailable or deleted songs?
 

@@ -38,3 +38,22 @@ export async function signOutOfSupabase() {
   const { error } = await supabase.auth.signOut();
   if (error) throw new Error(`Supabase sign-out failed: ${error.message}`);
 }
+
+export async function invokeLastfmEnrichment(limit = 10, trackIds = []) {
+  const { data, error } = await supabase.functions.invoke("enrich-lastfm", {
+    body: { limit, trackIds },
+  });
+  if (error) {
+    let details = "";
+    if (error.context instanceof Response) {
+      try {
+        const payload = await error.context.clone().json();
+        details = payload.error ? `: ${payload.error}` : "";
+      } catch {
+        details = "";
+      }
+    }
+    throw new Error(`Last.fm enrichment failed${details}`);
+  }
+  return data;
+}

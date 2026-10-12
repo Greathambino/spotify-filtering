@@ -162,6 +162,61 @@ h1 em {
   margin-top: 12px;
 }
 
+.import-progress {
+  margin-top: 16px;
+}
+
+.import-progress-heading {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 7px;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.import-progress-heading span:last-child {
+  color: var(--green);
+  font-variant-numeric: tabular-nums;
+}
+
+.import-progress progress {
+  display: block;
+  width: 100%;
+  height: 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: #263127;
+}
+
+.import-progress progress::-webkit-progress-bar {
+  border-radius: 999px;
+  background: #263127;
+}
+
+.import-progress progress::-webkit-progress-value {
+  border-radius: 999px;
+  background: var(--green);
+  transition: width 180ms ease-out;
+}
+
+.import-progress progress::-moz-progress-bar {
+  border-radius: 999px;
+  background: var(--green);
+}
+
+.import-progress.is-complete progress::-webkit-progress-value {
+  background: #6f8f78;
+}
+
+.import-progress.is-complete progress::-moz-progress-bar {
+  background: #6f8f78;
+}
+
+.import-progress.is-complete .import-progress-heading span:last-child {
+  color: #6f8f78;
+}
+
 .playlist-toolbar {
   display: flex;
   align-items: flex-start;
@@ -708,6 +763,35 @@ label span,
   border: 1px solid var(--border);
   border-radius: 14px;
   scrollbar-color: #53644d #182019;
+}
+
+.loading-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  min-height: 130px;
+  margin: 0;
+  color: var(--muted);
+}
+
+.loading-spinner {
+  width: 17px;
+  height: 17px;
+  border: 2px solid #53644d;
+  border-top-color: var(--green);
+  border-radius: 50%;
+  animation: spin 700ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.tag-picker[inert] {
+  opacity: 0.55;
 }
 
 .song-card {

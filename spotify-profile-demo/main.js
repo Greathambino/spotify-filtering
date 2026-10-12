@@ -1,6 +1,7 @@
 import "./style.css";
 import {
   getSupabaseSession,
+  invokeLastfmEnrichment,
   signInWithSpotify,
   signOutOfSupabase,
 } from "./src/supabase";
@@ -9,13 +10,12 @@ import {
   loadPlaylistSets,
   loadTracksForPlaylists,
   loadUserTags,
-  createUserTag,
-  setTrackTag,
   savePlaylistSet,
   saveSelectedPlaylistTracks,
   saveSpotifyUser,
   createPlaylistJob,
   updatePlaylistJob,
+  enqueueLastfmEnrichment,
 } from "./src/supabase-data";
 import { filterTracks, normalizeTrack } from "./src/track-model";
 
@@ -120,6 +120,13 @@ document.querySelector("#app").innerHTML = `
       <button id="import-tracks" class="button button-primary" type="button">
         Import your playlists
       </button>
+      <div id="import-progress" class="import-progress" hidden>
+        <div class="import-progress-heading">
+          <span id="import-progress-label">Preparing import…</span>
+          <span id="import-progress-percent">0%</span>
+        </div>
+        <progress id="import-progress-bar" max="100" value="0" aria-label="Overall playlist import progress"></progress>
+      </div>
       <p id="playlist-status" class="profile-status"></p>
     </section>
 
@@ -135,6 +142,12 @@ document.querySelector("#app").innerHTML = `
         Build your filter from playlist tags, release dates, content status, and custom
         tags. Click once to include, twice to exclude, and again to clear.
       </p>
+      <p class="panel-copy">
+        Last.fm tags are imported in the background and labeled by whether they came
+        from the track or its artist. See
+        <a href="https://www.last.fm/api" target="_blank" rel="noreferrer">Last.fm</a>
+        for the source.
+      </p>
       <div id="tag-picker" class="tag-picker" role="group" aria-label="Playlist and custom tags"></div>
     </section>
 
@@ -146,6 +159,9 @@ document.querySelector("#app").innerHTML = `
         </div>
         <div class="results-actions">
           <p id="track-filter-description" class="filter-description">No tags selected</p>
+          <button id="export-track-sample" class="button button-secondary" type="button" disabled>
+            Download track sample
+          </button>
           <button id="create-playlist" class="button" type="button" disabled>
             Create Spotify playlist
           </button>
@@ -210,11 +226,16 @@ const tagPanel = document.querySelector("#tag-panel");
 const trackResultsPanel = document.querySelector("#track-results-panel");
 const trackResultCount = document.querySelector("#track-result-count");
 const trackFilterDescription = document.querySelector("#track-filter-description");
+const exportTrackSampleButton = document.querySelector("#export-track-sample");
 const createPlaylistButton = document.querySelector("#create-playlist");
 const createPlaylistStatus = document.querySelector("#create-playlist-status");
 const trackSongList = document.querySelector("#track-song-list");
 const playlistList = document.querySelector("#playlist-list");
 const playlistStatus = document.querySelector("#playlist-status");
+const importProgress = document.querySelector("#import-progress");
+const importProgressBar = document.querySelector("#import-progress-bar");
+const importProgressLabel = document.querySelector("#import-progress-label");
+const importProgressPercent = document.querySelector("#import-progress-percent");
 const loadPlaylistsButton = document.querySelector("#load-playlists");
 const importTracksButton = document.querySelector("#import-tracks");
 const playlistSetSelect = document.querySelector("#playlist-set");
@@ -238,9 +259,26 @@ let importedTracks = [];
 let trackResultsRequest = 0;
 let userTags = [];
 const expandedTrackIds = new Set();
-const draftTagIdsByTrackId = new Map();
 let playlistSetSaveQueue = Promise.resolve();
 let playlistCreationInProgress = false;
+const SPOTIFY_IMPORT_CONCURRENCY = 5;
+const SPOTIFY_MAX_RATE_LIMIT_RETRIES = 4;
+
+function wait(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function updateImportProgress(percent, label) {
+  const boundedPercent = Math.max(0, Math.min(100, Math.round(percent)));
+  importProgress.hidden = false;
+  importProgress.style.display = "block";
+  importProgress.setAttribute("aria-hidden", "false");
+  importProgress.classList.toggle("is-complete", boundedPercent === 100);
+  importProgressBar.value = boundedPercent;
+  importProgressBar.setAttribute("aria-label", label);
+  importProgressLabel.textContent = label;
+  importProgressPercent.textContent = `${boundedPercent}%`;
+}
 
 async function spotifyGet(accessToken, endpoint) {
   const response = await fetch(`https://api.spotify.com/v1${endpoint}`, {
@@ -290,7 +328,6 @@ function resetSpotifyConnection() {
   tagStates.clear();
   userTags = [];
   expandedTrackIds.clear();
-  draftTagIdsByTrackId.clear();
   importedTracks = [];
   spotifyProfileId = null;
   playlistList.replaceChildren();
@@ -357,7 +394,44 @@ function getAvailableTags() {
       label: tag.name,
       customTagId: tag.id,
     }));
-  return [...playlistTags, ...customTags]
+  const externalTagCounts = new Map();
+  const externalTagPopularity = new Map();
+  importedTracks.forEach((track) => {
+    [...new Set(
+      (track.externalTags || [])
+        .filter((tag) => !/^(?:\d{2}s|(?:19|20)\d{2}s?)$/.test(tag.name))
+        .map((tag) => tag.id),
+    )].forEach((tagId) => {
+      externalTagCounts.set(tagId, (externalTagCounts.get(tagId) || 0) + 1);
+    });
+    (track.externalTags || []).forEach((tag) => {
+      const currentPopularity = externalTagPopularity.get(tag.id) || 0;
+      externalTagPopularity.set(
+        tag.id,
+        Math.max(currentPopularity, Number(tag.popularity) || 0),
+      );
+    });
+  });
+  const externalTags = [...new Map(
+    importedTracks
+      .flatMap((track) => track.externalTags || [])
+      .filter((tag) => !/^(?:\d{2}s|(?:19|20)\d{2}s?)$/.test(tag.name))
+      .map((tag) => [tag.id, tag]),
+  ).values()]
+    .sort((left, right) =>
+      (externalTagCounts.get(right.id) || 0) - (externalTagCounts.get(left.id) || 0)
+      || (externalTagPopularity.get(right.id) || 0)
+        - (externalTagPopularity.get(left.id) || 0)
+      || left.name.localeCompare(right.name, undefined, { sensitivity: "base" }))
+    .slice(0, 20)
+    .map((tag) => ({
+    id: tag.id,
+    name: tag.name,
+    kind: "external",
+    label: tag.name,
+    externalTagId: tag.id,
+    }));
+  return [...playlistTags, ...customTags, ...externalTags]
     .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" }));
 }
 
@@ -391,6 +465,11 @@ function renderTagPicker() {
           && !/^\d{4}s$/.test(tag.name)
           && !["Clean", "Explicit"].includes(tag.name),
       ),
+      className: "",
+    },
+    {
+      label: "Last.fm tags",
+      tags: tags.filter((tag) => tag.kind === "external"),
       className: "",
     },
   ];
@@ -472,9 +551,14 @@ function updateTagStatus() {
 }
 
 function getPlaylistIdsForTagState(state) {
+  const playlistTagIds = new Set(
+    getAvailableTags()
+      .filter((tag) => tag.kind === "source-playlist")
+      .map((tag) => tag.id),
+  );
   return new Set(
     [...tagStates]
-      .filter(([tagId, tagState]) => tagState === state && !tagId.startsWith("custom:"))
+      .filter(([tagId, tagState]) => tagState === state && playlistTagIds.has(tagId))
       .map(([playlistId]) => playlistId),
   );
 }
@@ -482,12 +566,13 @@ function getPlaylistIdsForTagState(state) {
 function getCustomTagIdsForTagState(state) {
   const customTagIdsByFilterId = new Map(
     getAvailableTags()
-      .filter((tag) => tag.kind === "custom")
-      .map((tag) => [tag.id, tag.customTagId]),
+      .filter((tag) => tag.kind === "custom" || tag.kind === "external")
+      .map((tag) => [tag.id, tag.customTagId || tag.externalTagId]),
   );
   return new Set(
     [...tagStates]
-      .filter(([tagId, tagState]) => tagState === state && tagId.startsWith("custom:"))
+      .filter(([tagId, tagState]) =>
+        tagState === state && customTagIdsByFilterId.has(tagId))
       .map(([tagId]) => customTagIdsByFilterId.get(tagId))
       .filter(Boolean),
   );
@@ -507,6 +592,7 @@ function renderTrackResults(tracks) {
   const filteredTracks = getFilteredTracks(tracks);
 
   trackResultCount.textContent = filteredTracks.length;
+  exportTrackSampleButton.disabled = !tracks.length;
   createPlaylistButton.disabled = !filteredTracks.length || playlistCreationInProgress;
   trackFilterDescription.textContent = included.length || excluded.length
     ? [
@@ -526,7 +612,7 @@ function renderTrackResults(tracks) {
     return;
   }
 
-  const fragment = document.createDocumentFragment();
+    const fragment = document.createDocumentFragment();
   filteredTracks.forEach((track) => {
     const card = document.createElement("article");
     card.className = "song-card";
@@ -555,6 +641,43 @@ function renderTrackResults(tracks) {
     fragment.append(card);
   });
   trackSongList.append(fragment);
+}
+
+function exportTrackSample() {
+  if (!importedTracks.length) return;
+  const payload = {
+    exportedAt: new Date().toISOString(),
+    playlistSetId: activePlaylistSetId,
+    trackCount: importedTracks.length,
+    tracks: importedTracks.map((track) => ({
+      spotifyTrackId: track.spotifyTrackId,
+      title: track.title,
+      artistNames: track.artistNames,
+      albumName: track.albumName,
+    })),
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "spotify-filtering-track-sample.json";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function setTrackResultsLoading(isLoading) {
+  trackResultsPanel.classList.toggle("is-loading", isLoading);
+  trackResultsPanel.setAttribute("aria-busy", String(isLoading));
+  tagPicker.toggleAttribute("inert", isLoading);
+  createPlaylistButton.disabled = isLoading || playlistCreationInProgress || !importedTracks.length;
+  exportTrackSampleButton.disabled = isLoading || !importedTracks.length;
+  if (!isLoading) return;
+  trackResultCount.textContent = "0";
+  trackFilterDescription.textContent = "Loading the selected playlist set…";
+  const loadingState = document.createElement("p");
+  loadingState.className = "loading-state";
+  loadingState.innerHTML = "<span class=\"loading-spinner\" aria-hidden=\"true\"></span> Loading this playlist set…";
+  trackSongList.replaceChildren(loadingState);
 }
 
 async function createSpotifyPlaylist() {
@@ -634,161 +757,53 @@ async function createSpotifyPlaylist() {
 function renderTrackTagEditor(track) {
   const editor = document.createElement("div");
   editor.className = "song-tag-editor";
-  const draftTagIds = draftTagIdsByTrackId.get(track.id)
-    || new Set(track.customTagIds);
-  draftTagIdsByTrackId.set(track.id, draftTagIds);
-
+  const heading = document.createElement("strong");
+  heading.textContent = "Tags";
+  editor.append(heading);
   const tagList = document.createElement("div");
   tagList.className = "song-tag-list";
-  const heading = document.createElement("strong");
-  heading.textContent = "Associated tags";
-  editor.append(heading);
   const sourceTags = track.sourcePlaylistIds
     .map((playlistId) => getAvailableTags().find((tag) => tag.id === playlistId)?.label)
     .filter(Boolean);
-  [...new Set(sourceTags)].forEach((name) => {
+  const customTags = userTags
+    .filter((tag) => track.customTagIds?.includes(tag.id))
+    .map((tag) => tag.name);
+  [...new Set([...sourceTags, ...customTags])]
+    .sort((left, right) => left.localeCompare(right, undefined, { sensitivity: "base" }))
+    .forEach((name) => {
       const tag = document.createElement("span");
       tag.className = "song-tag";
       tag.textContent = name;
       tagList.append(tag);
-  });
+    });
+  if (!tagList.children.length) {
+    const emptyState = document.createElement("span");
+    emptyState.className = "song-tag-empty";
+    emptyState.textContent = "No tags assigned";
+    tagList.append(emptyState);
+  }
   editor.append(tagList);
-
-  const associatedTags = new Set(draftTagIds);
-  const sourcePlaylistIds = new Set(track.sourcePlaylistIds);
-  const controls = document.createElement("div");
-  controls.className = "song-tag-controls associated-tag-controls";
-  userTags.filter((tag) => associatedTags.has(tag.id)).forEach((tag) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "song-tag-option";
-    button.textContent = tag.name;
-    button.addEventListener("click", () => {
-      draftTagIds.delete(tag.id);
-      renderTrackResults(importedTracks);
-    });
-    controls.append(button);
-  });
-  editor.append(controls);
-
-  const unassociatedHeading = document.createElement("strong");
-  unassociatedHeading.textContent = "Available tags";
-  editor.append(unassociatedHeading);
-  const availableControls = document.createElement("div");
-  availableControls.className = "song-tag-controls";
-  const availableTagNames = new Set(
-    userTags
-      .filter((tag) => !associatedTags.has(tag.id))
-      .map((tag) => tag.name),
-  );
-  userTags.filter((tag) => !associatedTags.has(tag.id)).forEach((tag) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "song-tag-option";
-    button.textContent = tag.name;
-    button.addEventListener("click", () => {
-      draftTagIds.add(tag.id);
-      renderTrackResults(importedTracks);
-    });
-    availableControls.append(button);
-  });
-  availablePlaylists
-    .filter((playlist) => (
-      selectedPlaylistIds.has(playlist.id)
-      && !sourcePlaylistIds.has(playlist.id)
-      && !availableTagNames.has(playlist.name)
-    ))
-    .forEach((playlist) => {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "song-tag-option source-tag-option";
-      button.textContent = getAvailableTags().find((tag) => tag.id === playlist.id)?.label
-        || playlist.name;
-      button.addEventListener("click", async () => {
-        button.disabled = true;
-        try {
-          const tag = userTags.find((existingTag) => existingTag.name === playlist.name)
-            || await createUserTag(supabaseUser, playlist.name);
-          if (!userTags.some((existingTag) => existingTag.id === tag.id)) userTags.push(tag);
-          draftTagIds.add(tag.id);
-          renderTrackResults(importedTracks);
-        } catch (error) {
-          playlistStatus.textContent = error.message;
-          button.disabled = false;
-        }
-      });
-      availableControls.append(button);
-    });
-  editor.append(availableControls);
-
-  const form = document.createElement("form");
-  form.className = "inline-tag-form";
-  const input = document.createElement("input");
-  input.type = "text";
-  input.maxLength = 50;
-  input.placeholder = "Create a new tag";
-  const button = document.createElement("button");
-  button.type = "submit";
-  button.className = "button button-secondary";
-  button.textContent = "Add tag";
-  form.append(input, button);
-  form.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const name = input.value.trim();
-    if (!name || !supabaseUser) return;
-    button.disabled = true;
-    try {
-      const tag = await createUserTag(supabaseUser, name);
-      if (!userTags.some((existingTag) => existingTag.id === tag.id)) userTags.push(tag);
-      draftTagIds.add(tag.id);
-      renderTrackResults(importedTracks);
-    } catch (error) {
-      playlistStatus.textContent = error.message;
-    } finally {
-      button.disabled = false;
-    }
-  });
-  editor.append(form);
-
-  const saveButton = document.createElement("button");
-  saveButton.type = "button";
-  saveButton.className = "button";
-  saveButton.textContent = "Save";
-  saveButton.addEventListener("click", async () => {
-    saveButton.disabled = true;
-    try {
-      const originalTagIds = new Set(track.customTagIds);
-      for (const tagId of originalTagIds) {
-        if (!draftTagIds.has(tagId)) await setTrackTag(track.id, tagId, false);
-      }
-      for (const tagId of draftTagIds) {
-        if (!originalTagIds.has(tagId)) await setTrackTag(track.id, tagId, true);
-      }
-      track.customTagIds = [...draftTagIds];
-      draftTagIdsByTrackId.delete(track.id);
-      renderTrackResults(importedTracks);
-    } catch (error) {
-      playlistStatus.textContent = error.message;
-    } finally {
-      saveButton.disabled = false;
-    }
-  });
-  editor.append(saveButton);
   return editor;
 }
 
 async function refreshTrackResults() {
+  const requestId = ++trackResultsRequest;
+  importedTracks = [];
+  setTrackResultsLoading(true);
+  renderTagPicker();
+  updateTagStatus();
   if (!supabaseUser || !selectedPlaylistIds.size) {
-    importedTracks = [];
+    setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
     renderTrackResults(importedTracks);
     return;
   }
-  const requestId = ++trackResultsRequest;
   try {
-    importedTracks = await loadTracksForPlaylists(supabaseUser, [...selectedPlaylistIds]);
+    const tracks = await loadTracksForPlaylists(supabaseUser, [...selectedPlaylistIds]);
     if (requestId === trackResultsRequest) {
+      importedTracks = tracks;
+      setTrackResultsLoading(false);
       renderTagPicker();
       updateTagStatus();
       renderTrackResults(importedTracks);
@@ -796,10 +811,11 @@ async function refreshTrackResults() {
   } catch (error) {
     if (requestId !== trackResultsRequest) return;
     importedTracks = [];
+    setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
+    renderTrackResults(importedTracks);
     trackFilterDescription.textContent = error.message;
-    trackSongList.replaceChildren();
   }
 }
 
@@ -931,7 +947,9 @@ async function loadPlaylists() {
       offset += payload.items?.length || 0;
       if (!payload.items?.length) break;
     }
-    availablePlaylists = playlists;
+    availablePlaylists = [...new Map(
+      playlists.map((playlist) => [playlist.id, playlist]),
+    ).values()];
     if (supabaseUser) {
       await savePlaylistCatalog(supabaseUser, availablePlaylists);
     }
@@ -960,6 +978,7 @@ createSetButton.addEventListener("click", async () => {
   playlistSets.push(newSet);
   activePlaylistSetId = newSet.id;
   selectedPlaylistIds = new Set();
+  updateImportProgress(0, "Ready to load this playlist set");
   renderPlaylistSets();
   renderPlaylists();
   renderTagPicker();
@@ -994,10 +1013,9 @@ playlistSetSelect.addEventListener("change", () => {
     playlistSetStatus.textContent = `Could not save the previous set: ${error.message}`;
   });
   selectedPlaylistIds = new Set(activeSet?.playlistIds || []);
+  updateImportProgress(0, "Ready to load this playlist set");
   renderPlaylists();
-  renderTagPicker();
   updatePlaylistStatus();
-  updateTagStatus();
   refreshTrackResults();
   playlistSetStatus.textContent = `"${activeSet.name}" loaded. Select playlists to update it.`;
 });
@@ -1007,10 +1025,21 @@ async function fetchAllPlaylistTracks(playlistId) {
   let offset = 0;
   let total = Infinity;
   while (offset < total) {
-    const payload = await spotifyGet(
-      spotifyAccessToken,
-      `/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100&offset=${offset}`,
-    );
+    let payload;
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        payload = await spotifyGet(
+          spotifyAccessToken,
+          `/playlists/${encodeURIComponent(playlistId)}/tracks?limit=100&offset=${offset}`,
+        );
+        break;
+      } catch (error) {
+        if (!error.message.toLowerCase().includes("rate limit") || attempt >= 4) {
+          throw error;
+        }
+        await new Promise((resolve) => setTimeout(resolve, (2 ** attempt) * 1000));
+      }
+    }
     items.push(...(payload.items || []));
     total = payload.total || items.length;
     offset += payload.items?.length || 0;
@@ -1025,6 +1054,12 @@ async function importSelectedTracks() {
     return;
   }
   importTracksButton.disabled = true;
+  importedTracks = [];
+  tagStates.clear();
+  updateImportProgress(0, "Fetching playlist tracks…");
+  setTrackResultsLoading(true);
+  renderTagPicker();
+  updateTagStatus();
   playlistStatus.textContent = "Importing selected playlist tracks…";
   try {
     const selectedPlaylists = availablePlaylists
@@ -1035,24 +1070,48 @@ async function importSelectedTracks() {
       selectedPlaylists,
       fetchAllPlaylistTracks,
       (progress) => {
-        const completedCount = progress.importedTrackCount + progress.alreadyImportedTrackCount;
-        const pendingCount = Math.max(0, progress.uniqueTrackCount - completedCount);
-        playlistStatus.textContent =
-          `${progress.uniqueTrackCount} unique tracks found · `
-          + `${completedCount} imported/already imported · `
-          + `${pendingCount} still processing`;
+        if (progress.phase === "fetching") {
+          const playlistPercent = progress.playlistsTotal
+            ? (progress.playlistsCompleted / progress.playlistsTotal) * 30
+            : 0;
+          updateImportProgress(playlistPercent, `Fetching playlists… ${progress.playlistsCompleted}/${progress.playlistsTotal}`);
+        } else if (progress.phase === "persisting") {
+          updateImportProgress(
+            progress.progressPercent || 30,
+            progress.progressPercent >= 90 ? "Finishing import…" : "Saving track metadata…",
+          );
+        } else if (progress.phase === "complete") {
+          updateImportProgress(95, "Refreshing imported tracks…");
+        }
+        const uniqueTrackCount = progress.uniqueTrackCount ?? 0;
+        if (progress.phase === "fetching") {
+          playlistStatus.textContent =
+            `${progress.playlistsCompleted} of ${progress.playlistsTotal} playlists fetched · `
+            + "Collecting tracks…";
+        } else if (progress.phase === "persisting") {
+          playlistStatus.textContent =
+            `${uniqueTrackCount} unique tracks found · `
+            + "Saving import data…";
+        } else {
+          playlistStatus.textContent = `${uniqueTrackCount} unique tracks found · Finalizing…`;
+        }
       },
     );
     userTags = await loadUserTags(supabaseUser);
     tagPanel.hidden = false;
     trackResultsPanel.hidden = false;
     renderTagPicker();
-    refreshTrackResults();
+    await refreshTrackResults();
+    updateImportProgress(100, "Import complete");
+    importProgress.hidden = false;
+    importProgress.style.display = "block";
+    importProgress.setAttribute("aria-hidden", "false");
     playlistStatus.textContent =
-      `${summary.uniqueTrackCount} unique tracks selected · `
+      `${importedTracks.length} unique tracks available · `
       + `${summary.importedTrackCount + summary.alreadyImportedTrackCount} imported/already imported `
       + `(${summary.importedTrackCount} new, ${summary.alreadyImportedTrackCount} already imported) · `
       + `${summary.failedTrackCount} failed to import.`;
+    void startLastfmEnrichment(supabaseUser);
     if (summary.failedPlaylists.length) {
       playlistStatus.title = summary.failedPlaylists.join("\n");
     } else {
@@ -1062,6 +1121,60 @@ async function importSelectedTracks() {
     playlistStatus.textContent = error.message;
   } finally {
     importTracksButton.disabled = false;
+  }
+}
+
+async function startLastfmEnrichment(supabaseUser) {
+  try {
+    const trackIds = importedTracks.map((track) => track.id).filter(Boolean);
+    updateImportProgress(0, `Preparing Last.fm enrichment… 0/${trackIds.length} tracks`);
+    const queueSummary = await enqueueLastfmEnrichment(
+      supabaseUser,
+      trackIds,
+    );
+    const workCount = queueSummary.queuedCount + queueSummary.pendingCount;
+    if (!workCount) {
+      updateImportProgress(100, "Last.fm tags already up to date");
+      playlistStatus.textContent =
+        `Last.fm: ${queueSummary.alreadyQueriedCount} already queried, `
+        + `${queueSummary.ineligibleCount} local tracks not eligible.`;
+      return;
+    }
+    playlistStatus.textContent =
+      `Last.fm: ${queueSummary.queuedCount} new, `
+      + `${queueSummary.alreadyQueriedCount} already queried, `
+      + `${queueSummary.pendingCount} pending, `
+      + `${queueSummary.ineligibleCount} local not eligible…`;
+    let totalCompleted = 0;
+    let totalFailed = 0;
+    const enrichmentRequestSize = 20;
+    const totalToProcess = queueSummary.queuedCount + queueSummary.pendingCount;
+    const workTrackIds = queueSummary.workTrackIds || [];
+    let tracksProcessed = 0;
+    while (tracksProcessed < totalToProcess) {
+      const result = await invokeLastfmEnrichment(enrichmentRequestSize, workTrackIds);
+      const requested = result?.requested || 0;
+      totalCompleted += result?.completed || 0;
+      totalFailed += result?.failed || 0;
+      tracksProcessed += requested;
+      if (result?.failed) {
+        console.error("Last.fm enrichment batch failed:", result.errors);
+      }
+      updateImportProgress(
+        (tracksProcessed / totalToProcess) * 100,
+        `Enriching with Last.fm… ${Math.min(tracksProcessed, totalToProcess)}/${totalToProcess} tracks`,
+      );
+      playlistStatus.textContent =
+        `Last.fm enrichment: ${totalCompleted} completed, `
+        + `${totalFailed} failed, `
+        + `${queueSummary.ineligibleCount} local not eligible…`;
+      if (requested < enrichmentRequestSize) break;
+    }
+    await refreshTrackResults();
+    updateImportProgress(100, "Last.fm enrichment complete");
+  } catch (error) {
+    console.error("Last.fm enrichment stopped:", error);
+    playlistStatus.textContent = `Last.fm enrichment error: ${error.message}`;
   }
 }
 
@@ -1101,6 +1214,7 @@ async function initializeSpotifyProfile() {
 
 loadPlaylistsButton.addEventListener("click", loadPlaylists);
 importTracksButton.addEventListener("click", importSelectedTracks);
+exportTrackSampleButton.addEventListener("click", exportTrackSample);
 createPlaylistButton.addEventListener("click", createSpotifyPlaylist);
 playlistSearchInput.addEventListener("input", (event) => {
   playlistSearch = event.target.value.trim().toLocaleLowerCase();
