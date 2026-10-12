@@ -474,6 +474,7 @@ export async function saveSelectedPlaylistTracks(
   );
   const failedPlaylists = [];
   const fetchedPlaylists = [];
+  let unchangedPlaylistCount = 0;
   let nextPlaylistIndex = 0;
   let fetchedPlaylistCount = 0;
   async function fetchNextPlaylist() {
@@ -484,6 +485,7 @@ export async function saveSelectedPlaylistTracks(
         (candidate) => candidate.spotify_playlist_id === playlist.id,
       );
       if (savedPlaylist?.snapshot_id && savedPlaylist.snapshot_id === playlist.snapshot_id) {
+        unchangedPlaylistCount += 1;
         fetchedPlaylistCount += 1;
         onProgress({
           phase: "fetching",
@@ -574,6 +576,7 @@ export async function saveSelectedPlaylistTracks(
       alreadyImportedTrackCount: 0,
       failedTrackCount: 0,
       failedPlaylists,
+      allPlaylistsUnchanged: unchangedPlaylistCount === selectedPlaylists.length,
     };
   }
   const uniqueItems = [...new Map(

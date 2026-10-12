@@ -256,6 +256,7 @@ let supabaseUser;
 let playlistSearch = "";
 const tagStates = new Map();
 let importedTracks = [];
+let loadedPlaylistIds = new Set();
 let trackResultsRequest = 0;
 let userTags = [];
 const expandedTrackIds = new Set();
@@ -323,6 +324,7 @@ function resetSpotifyConnection() {
   trackResultsPanel.hidden = true;
   availablePlaylists = [];
   selectedPlaylistIds.clear();
+  loadedPlaylistIds.clear();
   playlistSets = [];
   activePlaylistSetId = null;
   tagStates.clear();
@@ -789,10 +791,12 @@ function renderTrackTagEditor(track) {
 async function refreshTrackResults() {
   const requestId = ++trackResultsRequest;
   importedTracks = [];
+  loadedPlaylistIds = new Set();
   setTrackResultsLoading(true);
   renderTagPicker();
   updateTagStatus();
   if (!supabaseUser || !selectedPlaylistIds.size) {
+    loadedPlaylistIds = new Set();
     setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
@@ -803,6 +807,7 @@ async function refreshTrackResults() {
     const tracks = await loadTracksForPlaylists(supabaseUser, [...selectedPlaylistIds]);
     if (requestId === trackResultsRequest) {
       importedTracks = tracks;
+      loadedPlaylistIds = new Set(selectedPlaylistIds);
       setTrackResultsLoading(false);
       renderTagPicker();
       updateTagStatus();
@@ -811,6 +816,7 @@ async function refreshTrackResults() {
   } catch (error) {
     if (requestId !== trackResultsRequest) return;
     importedTracks = [];
+    loadedPlaylistIds = new Set();
     setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
@@ -1101,7 +1107,11 @@ async function importSelectedTracks() {
     tagPanel.hidden = false;
     trackResultsPanel.hidden = false;
     renderTagPicker();
-    await refreshTrackResults();
+    const sameLoadedSet = selectedPlaylistIds.size === loadedPlaylistIds.size
+      && [...selectedPlaylistIds].every((playlistId) => loadedPlaylistIds.has(playlistId));
+    if (!summary.allPlaylistsUnchanged || !sameLoadedSet) {
+      await refreshTrackResults();
+    }
     updateImportProgress(100, "Import complete");
     importProgress.hidden = false;
     importProgress.style.display = "block";
