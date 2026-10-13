@@ -488,6 +488,38 @@ export async function saveSelectedPlaylistTracks(
   const databasePlaylistIds = new Map(
     savedPlaylists.map((playlist) => [playlist.spotify_playlist_id, playlist.id]),
   );
+  const unchangedCandidates = selectedPlaylists
+    .map((playlist) => {
+      const savedPlaylist = savedPlaylists.find(
+        (candidate) => candidate.spotify_playlist_id === playlist.id,
+      );
+      return savedPlaylist?.snapshot_id
+        && savedPlaylist.snapshot_id === playlist.snapshot_id
+        ? { playlist, savedPlaylist }
+        : null;
+    })
+    .filter(Boolean);
+  const cachedPlaylistIds = new Set(
+    unchangedCandidates
+      .filter(({ playlist }) => playlist.tracks?.total === 0)
+      .map(({ savedPlaylist }) => savedPlaylist.id),
+  );
+  const nonEmptyUnchangedCandidates = unchangedCandidates.filter(
+    ({ playlist }) => playlist.tracks?.total !== 0,
+  );
+  if (nonEmptyUnchangedCandidates.length) {
+    const { data: cachedRelationships, error: relationshipError } = await supabase
+      .from("playlist_tracks")
+      .select("playlist_id")
+      .in(
+        "playlist_id",
+        nonEmptyUnchangedCandidates.map(({ savedPlaylist }) => savedPlaylist.id),
+      );
+    if (relationshipError) {
+      throw new Error(`Could not validate cached playlist tracks: ${relationshipError.message}`);
+    }
+    cachedRelationships.forEach(({ playlist_id: playlistId }) => cachedPlaylistIds.add(playlistId));
+  }
   const failedPlaylists = [];
   const fetchedPlaylists = [];
   let unchangedPlaylistCount = 0;
@@ -500,7 +532,7 @@ export async function saveSelectedPlaylistTracks(
       const savedPlaylist = savedPlaylists.find(
         (candidate) => candidate.spotify_playlist_id === playlist.id,
       );
-      if (savedPlaylist?.snapshot_id && savedPlaylist.snapshot_id === playlist.snapshot_id) {
+      if (savedPlaylist && cachedPlaylistIds.has(savedPlaylist.id)) {
         unchangedPlaylistCount += 1;
         fetchedPlaylistCount += 1;
         onProgress({
