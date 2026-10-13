@@ -260,6 +260,7 @@ let playlistSearch = "";
 const tagStates = new Map();
 let importedTracks = [];
 let loadedPlaylistIds = new Set();
+let trackResultsLoaded = false;
 let trackResultsRequest = 0;
 let userTags = [];
 const expandedTrackIds = new Set();
@@ -335,6 +336,7 @@ function resetSpotifyConnection() {
   availablePlaylists = [];
   selectedPlaylistIds.clear();
   loadedPlaylistIds.clear();
+  trackResultsLoaded = false;
   playlistSets = [];
   activePlaylistSetId = null;
   tagStates.clear();
@@ -811,11 +813,13 @@ async function refreshTrackResults() {
   const requestId = ++trackResultsRequest;
   importedTracks = [];
   loadedPlaylistIds = new Set();
+  trackResultsLoaded = false;
   setTrackResultsLoading(true);
   renderTagPicker();
   updateTagStatus();
   if (!supabaseUser || !selectedPlaylistIds.size) {
     loadedPlaylistIds = new Set();
+    trackResultsLoaded = true;
     setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
@@ -827,6 +831,7 @@ async function refreshTrackResults() {
     if (requestId === trackResultsRequest) {
       importedTracks = tracks;
       loadedPlaylistIds = new Set(selectedPlaylistIds);
+      trackResultsLoaded = true;
       setTrackResultsLoading(false);
       renderTagPicker();
       updateTagStatus();
@@ -836,6 +841,7 @@ async function refreshTrackResults() {
     if (requestId !== trackResultsRequest) return;
     importedTracks = [];
     loadedPlaylistIds = new Set();
+    trackResultsLoaded = false;
     setTrackResultsLoading(false);
     renderTagPicker();
     updateTagStatus();
@@ -1133,7 +1139,7 @@ async function importSelectedTracks() {
     renderTagPicker();
     const sameLoadedSet = selectedPlaylistIds.size === loadedPlaylistIds.size
       && [...selectedPlaylistIds].every((playlistId) => loadedPlaylistIds.has(playlistId));
-    if (!summary.allPlaylistsUnchanged || !sameLoadedSet) {
+    if (!summary.allPlaylistsUnchanged || !sameLoadedSet || !trackResultsLoaded) {
       await refreshTrackResults();
     } else {
       setTrackResultsLoading(false);
