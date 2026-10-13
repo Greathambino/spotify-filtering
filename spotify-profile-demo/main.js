@@ -687,13 +687,17 @@ function exportTrackSample() {
   URL.revokeObjectURL(url);
 }
 
-function setTrackResultsLoading(isLoading) {
+function setTrackResultsLoading(isLoading, preserveExistingResults = false) {
   trackResultsPanel.classList.toggle("is-loading", isLoading);
   trackResultsPanel.setAttribute("aria-busy", String(isLoading));
   tagPicker.toggleAttribute("inert", isLoading);
   createPlaylistButton.disabled = isLoading || playlistCreationInProgress || !importedTracks.length;
   exportTrackSampleButton.disabled = isLoading || !importedTracks.length;
   if (!isLoading) return;
+  if (preserveExistingResults && importedTracks.length) {
+    trackFilterDescription.textContent = "Updating the selected playlist set…";
+    return;
+  }
   trackResultCount.textContent = "";
   trackResultLabel.textContent = "Loading selected tracks…";
   trackFilterDescription.textContent = "Loading the selected playlist set…";
@@ -809,12 +813,12 @@ function renderTrackTagEditor(track) {
   return editor;
 }
 
-async function refreshTrackResults() {
+async function refreshTrackResults(preserveExistingResults = importedTracks.length > 0) {
   const requestId = ++trackResultsRequest;
-  importedTracks = [];
+  setTrackResultsLoading(true, preserveExistingResults);
+  if (!preserveExistingResults) importedTracks = [];
   loadedPlaylistIds = new Set();
   trackResultsLoaded = false;
-  setTrackResultsLoading(true);
   renderTagPicker();
   updateTagStatus();
   if (!supabaseUser || !selectedPlaylistIds.size) {
@@ -884,7 +888,7 @@ function renderPlaylists() {
       renderPlaylists();
       renderTagPicker();
       updateTagStatus();
-      refreshTrackResults();
+      refreshTrackResults(false);
     });
     const copy = document.createElement("span");
     copy.className = "playlist-option-copy";
@@ -987,7 +991,7 @@ async function loadPlaylists() {
 
     renderPlaylists();
     renderTagPicker();
-    refreshTrackResults();
+    refreshTrackResults(false);
     playlistStatus.textContent = availablePlaylists.length
       ? "Select the playlists you want to use for filtering."
       : "No playlists were found.";
@@ -1016,7 +1020,7 @@ createSetButton.addEventListener("click", async () => {
   updateTagStatus();
   updatePlaylistStatus();
   trackResultsPanel.hidden = false;
-  refreshTrackResults();
+  refreshTrackResults(false);
   playlistSetStatus.textContent = `Saving "${newSet.name}"…`;
   try {
     await saveActivePlaylistSet();
@@ -1047,7 +1051,7 @@ playlistSetSelect.addEventListener("change", () => {
   updateImportProgress(0, "Ready to load this playlist set");
   renderPlaylists();
   updatePlaylistStatus();
-  refreshTrackResults();
+  refreshTrackResults(false);
   playlistSetStatus.textContent = `"${activeSet.name}" loaded. Select playlists to update it.`;
 });
 
@@ -1087,7 +1091,7 @@ async function importSelectedTracks() {
   setImportButtonBusy(true, "Importing…");
   tagStates.clear();
   updateImportProgress(0, "Spotify · Checking playlists — 0 selected");
-  setTrackResultsLoading(true);
+  setTrackResultsLoading(true, importedTracks.length > 0);
   renderTagPicker();
   updateTagStatus();
   playlistStatus.textContent = "Importing selected playlist tracks…";
